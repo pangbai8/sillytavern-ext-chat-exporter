@@ -1,361 +1,173 @@
 (function() {
     'use strict';
 
-    const extensionName = 'chat-exporter';
+    /**
+     * Chat‑Exporter (HTML)
+     * --------------------
+     * 将 SillyTavern 对话导出为浏览器可读的 HTML 文件，保留 <table>/<pre>… 等富文本。
+     */
 
-    // 配置参数
-    const config = {
-        separator: '\n\n',
+    const CONFIG = {
         fileNameMaxLength: 30
     };
 
-    console.log('Chat Exporter: Script loaded (HTML version)');
+    /* ========== UI ========== */
+    function addSettingsUI() {
+        if (document.getElementById('chat-exporter-export-all')) return; // 已存在
 
-    // 添加扩展设置UI
-    function addExtensionSettings() {
-        console.log('Chat Exporter: Adding extension settings');
-
-        // 检查是否已经存在，防止重复添加
-        if (document.getElementById('chat-exporter-export-all')) {
-            console.log('Chat Exporter: Settings already exists, skipping');
-            return;
-        }
-
-        const settingsHtml = `
-            <div class="extension-settings" id="chat-exporter-settings">
-                <div class="inline-drawer">
-                    <div class="inline-drawer-toggle inline-drawer-header">
-                        <b>📚 对话导出器 (HTML)</b>
-                        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-                    </div>
-                    <div class="inline-drawer-content">
-                        <div class="flex-container">
-                            <div class="flex1">
-                                <input type="button" id="chat-exporter-export-all" class="menu_button" value="导出当前对话为 HTML">
-                            </div>
+        const html = `
+        <div id="chat-exporter-settings" class="extension-settings">
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>📚 对话导出器 (HTML)</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div class="flex-container">
+                        <div class="flex1">
+                            <input id="chat-exporter-export-all" type="button" class="menu_button" value="导出当前对话为 HTML">
                         </div>
-
-                        <small class="notes">
-                            将导出 3 个 HTML 文件：完整对话、用户对话、角色对话
-                        </small>
                     </div>
+                    <small class="notes">将生成 3 个 HTML 文件：完整对话、用户对话、角色对话</small>
                 </div>
             </div>
-        `;
+        </div>`;
 
-        const container = document.querySelector('#extensions_settings2') ||
-                         document.querySelector('#extensions_settings') ||
-                         document.querySelector('.extensions_settings');
+        (document.querySelector('#extensions_settings2') ||
+         document.querySelector('#extensions_settings')  ||
+         document.querySelector('.extensions_settings'))?.insertAdjacentHTML('beforeend', html);
 
-        if (container) {
-            container.insertAdjacentHTML('beforeend', settingsHtml);
-            console.log('Chat Exporter: Settings UI added successfully');
-            bindEventListeners();
-        } else {
-            console.error('Chat Exporter: No suitable container found');
-        }
+        document.getElementById('chat-exporter-export-all')?.addEventListener('click', exportChat);
     }
 
-    // 绑定事件监听器
-    function bindEventListeners() {
-        console.log('Chat Exporter: Binding event listeners');
-
-        const exportAllButton = document.getElementById('chat-exporter-export-all');
-
-        if (exportAllButton) {
-            exportAllButton.addEventListener('click', function() {
-                console.log('Chat Exporter: Export button clicked');
-                exportChat();
-            });
-        }
-    }
-
-    // 主要导出函数
+    /* ========== 主流程 ========== */
     async function exportChat() {
-        console.log('Chat Exporter: Starting export');
-
+        toggleButton(true);
         try {
-            setButtonDisabled(true);
+            const messages = collectMessages();
+            if (!messages.length) return toast('没有找到对话消息');
 
-            const messages = getMessages();
-            console.log(`Chat Exporter: Found ${messages.length} messages`);
+            const processed = segregateByRole(messages);
+            if (!Object.keys(processed.roleContents).length) return toast('没有找到有效的对话内容');
 
-            if (messages.length === 0) {
-                showToast('没有找到对话消息');
-                return;
-            }
-
-            const processedData = processMessages(messages);
-            console.log(`Chat Exporter: Processed data for ${Object.keys(processedData.roleContents).length} roles`);
-
-            if (Object.keys(processedData.roleContents).length === 0) {
-                showToast('没有找到有效的对话内容');
-                return;
-            }
-
-            downloadFiles(processedData);
-            showToast('导出成功！已生成 3 个 HTML 文件');
-
-        } catch (error) {
-            console.error('Chat Exporter: Export failed:', error);
-            showToast('导出失败: ' + error.message);
+            saveFiles(processed);
+            toast('导出完成！');
+        } catch (err) {
+            console.error('Chat‑Exporter error', err);
+            toast('导出失败：' + err.message);
         } finally {
-            setButtonDisabled(false);
+            toggleButton(false);
         }
     }
 
-    // 获取消息
-    function getMessages() {
-        console.log('Chat Exporter: Getting messages from chat');
-
-        const messages = [];
-        const chatContainer = document.querySelector('#chat');
-
-        if (!chatContainer) {
-            console.warn('Chat Exporter: Chat container not found');
-            return messages;
-        }
-
-        const messageElements = chatContainer.querySelectorAll('.mes');
-        console.log(`Chat Exporter: Found ${messageElements.length} message elements`);
-
-        messageElements.forEach((msgElement, index) => {
-            const isUser = msgElement.classList.contains('is_user');
-            const isSystem = msgElement.classList.contains('is_system');
-
-            // 跳过系统消息
-            if (isSystem) {
-                return;
-            }
-
-            const nameElement = msgElement.querySelector('.name_text');
-            const contentElement = msgElement.querySelector('.mes_text');
-
-            if (contentElement) {
-                const name = nameElement ? nameElement.textContent.trim() : (isUser ? 'User' : 'Assistant');
-                const content = extractTextContent(contentElement);
-
-                if (content) {
-                    messages.push({
-                        name: name,
-                        content: content,
-                        isUser: isUser,
-                        isSystem: isSystem
-                    });
-                    console.log(`Chat Exporter: Message ${index + 1}: ${name} (${content.length} chars)`);
-                }
-            }
+    /* ========== 消息采集 ========== */
+    function collectMessages() {
+        const chat = document.querySelector('#chat');
+        if (!chat) return [];
+        const list = [];
+        chat.querySelectorAll('.mes').forEach(mes => {
+            if (mes.classList.contains('is_system')) return; // 跳过系统
+            const name = mes.querySelector('.name_text')?.textContent.trim() || (mes.classList.contains('is_user') ? 'User' : 'Assistant');
+            const html = extractContentHTML(mes.querySelector('.mes_text'));
+            if (html) list.push({ name, html });
         });
-
-        return messages;
+        return list;
     }
 
-    // 提取文本内容
-    function extractTextContent(element) {
-        // 克隆元素以避免修改原始DOM
-        const clone = element.cloneNode(true);
+    /**
+     * 提取单条消息 HTML，删除编辑按钮 / avatar 等不相关元素，但保留富文本结构。
+     */
+    function extractContentHTML(root) {
+        if (!root) return '';
+        const clone = root.cloneNode(true);
+        clone.querySelectorAll([
+            'script','style','noscript',
+            '.timestamp','.message-id',
+            '.edit-controls','.mes_edit_buttons',
+            '.mes_buttons','.swipe-controls',
+            '.avatar','.mes_edit_cancel',
+            '.mes_edit_save','.mes_edit_delete',
+            'StatusBlock','details statusblock'
+        ].join(',')).forEach(el => el.remove());
 
-        // 移除不需要的元素
-        const unwantedSelectors = [
-            'script', 'style', 'noscript',
-            '.timestamp', '.message-id',
-            '.edit-controls', '.swipe-controls',
-            '.mes_edit_buttons', '.avatar',
-            '.mes_buttons', '.mes_edit_cancel',
-            '.mes_edit_save', '.mes_edit_delete',
-            'StatusBlock','details'
-        ];
-
-        unwantedSelectors.forEach(selector => {
-            clone.querySelectorAll(selector).forEach(el => el.remove());
-        });
-
-        // 处理HTML内容
-        let text = clone.innerHTML;
-
-        text = text
-            .replace(/```yaml[\s\S]*?```/gi, '')
-            .replace(/<StatusBlock[\s\S]*?>([\s\S]*?)(<\/StatusBlock>|$)/gi, '')
-            .replace(/<br\s*\/?>(?=\n?)/gi, '\n')
-            .replace(/<\/p>/gi, '\n\n')
-            .replace(/<p[^>]*>/gi, '')
-            .replace(/<\/div>/gi, '\n')
-            .replace(/<div[^>]*>/gi, '')
-            .replace(/<[^>]+>/g, '')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&amp;/g, '&')
-            .replace(/&quot;/g, '"')
-            .replace(/&apos;/g, '\'')
-            .replace(/\n{3,}/g, '\n\n')
-            .replace(/^\s+|\s+$/g, '');
-
-        return text;
+        // 简易清理空行 &nbsp;→ space
+        let html = clone.innerHTML.replace(/&nbsp;/g,' ');
+        return html.trim();
     }
 
-    // 将纯文本转换为安全的 HTML
-    function textToHtml(text) {
-        return text.split(config.separator).map(block => {
-            const safe = block
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/\n/g, '<br>');
-            return `<div class="msg">${safe}</div>`;
-        }).join('\n');
-    }
-
-    // 包装成完整 HTML 文件
-    function wrapInHtml(title, bodyContent) {
-        return `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n<title>${title}</title>\n<style>body{font-family:Inter,\"Noto Sans SC\",sans-serif;line-height:1.6;padding:1em;} .msg{margin-bottom:1em;} .role{font-weight:bold;} pre{white-space:pre-wrap;} hr{margin:2em 0;} </style>\n</head>\n<body>\n${bodyContent}\n</body>\n</html>`;
-    }
-
-    // 处理消息内容
-    function processMessages(messages) {
+    /* ========== 数据分组 ========== */
+    function segregateByRole(messages) {
         const roleContents = {};
-        let fullContent = '';
+        const fullContent = [];
 
-        messages.forEach(message => {
-            const roleName = message.name;
-            const content = message.content;
-
-            if (content) {
-                fullContent += `${roleName}:\n${content}${config.separator}`;
-
-                if (!roleContents[roleName]) {
-                    roleContents[roleName] = '';
-                }
-                roleContents[roleName] += `${content}${config.separator}`;
-            }
+        messages.forEach(({name, html}) => {
+            fullContent.push({ name, html });
+            (roleContents[name] ||= []).push(html);
         });
 
-        return { fullContent, roleContents };
+        return { roleContents, fullContent };
     }
 
-    // 下载文件
-    function downloadFiles(processedData) {
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+    /* ========== 文件输出 ========== */
+    function saveFiles({ roleContents, fullContent }) {
+        const t = new Date().toISOString().slice(0,19).replace(/:/g,'-');
+        const roles = Object.keys(roleContents);
+        const user  = roles[0] || 'User';
+        const bot   = roles[1] || 'Assistant';
 
-        const roleNames = Object.keys(processedData.roleContents);
-        const [userName, cardName] = roleNames;
-
-        console.log('Chat Exporter: Starting file downloads (HTML)');
-
-        // 1. 各角色对话
-        roleNames.forEach(roleName => {
-            const htmlBody = textToHtml(processedData.roleContents[roleName].trim());
-            const htmlContent = wrapInHtml(`${roleName} 对话`, htmlBody);
-            downloadFile(`${safeName(roleName)}_dialog_${timestamp}.html`, htmlContent);
+        // 每角色一文件
+        roles.forEach(r => {
+            const body = roleContents[r].map(block => `<div class="msg">${block}</div>`).join('\n');
+            writeFile(`${safe(r)}_dialog_${t}.html`, wrapHtml(`${r} 对话`, body));
         });
 
-        // 2. 完整对话
-        const fullHtmlBody = processedData.fullContent.split(config.separator).map(section => {
-            if (!section) return '';
-            const match = section.match(/^(.*?):\n([\s\S]*)$/);
-            if (match) {
-                const role = match[1];
-                const msg = match[2].replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
-                return `<div class="msg"><span class="role">${role}:</span> ${msg}</div>`;
-            }
-            return '';
-        }).join('\n');
-
-        const fullHtml = wrapInHtml(`${userName} & ${cardName} 完整对话`, fullHtmlBody);
-        const fullFileName = `${safeName(userName)}_and_${safeName(cardName)}_full_dialog_${timestamp}.html`;
-        downloadFile(fullFileName, fullHtml);
-
-        console.log('Chat Exporter: All HTML files downloaded');
+        // 完整对话
+        const fullBody = fullContent.map(({name, html}) => `<div class="msg"><span class="role">${name}:</span> ${html}</div>`).join('\n');
+        writeFile(`${safe(user)}_and_${safe(bot)}_full_dialog_${t}.html`, wrapHtml(`${user} & ${bot} 完整对话`, fullBody));
     }
 
-    // 安全文件名处理
-    function safeName(name) {
-        return name
-            .replace(/[\\/*?:"<>|]/g, '_')
-            .substring(0, config.fileNameMaxLength)
-            .trim();
+    function wrapHtml(title, body) {
+        return `<!DOCTYPE html><html lang="zh‑CN"><head><meta charset="utf-8"><title>${title}</title><style>
+            body{font-family:Inter,\"Noto Sans SC\",sans-serif;margin:0;padding:1.5em;line-height:1.6;background:#fff;color:#222;}
+            .msg{margin-bottom:1.2em;}
+            .role{font-weight:600;margin-right:.3em;}
+            table{border-collapse:collapse;width:100%;margin:1em 0;}
+            th,td{border:1px solid #ccc;padding:.4em;vertical-align:top;}
+            pre{background:#f7f7f7;padding:.6em;border-radius:4px;overflow:auto;}
+            code{background:#f5f5f5;padding:.1em .3em;border-radius:3px;}
+        </style></head><body>${body}</body></html>`;
     }
 
-    // 下载单个文件
-    function downloadFile(filename, content) {
-        console.log(`Chat Exporter: Downloading file: ${filename}`);
-
-        const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+    function writeFile(name, content) {
+        const blob = new Blob([content], { type:'text/html;charset=utf-8' });
+        const url  = URL.createObjectURL(blob);
+        const a = Object.assign(document.createElement('a'), { href:url, download:name, style:'display:none' });
+        document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
     }
 
-    // 设置按钮状态
-    function setButtonDisabled(disabled) {
-        const button = document.getElementById('chat-exporter-export-all');
+    /* ========== 工具 ========== */
+    const toast = msg => (typeof toastr!=='undefined'?toastr.info(msg):alert(msg));
 
-        if (button) {
-            button.disabled = disabled;
-            if (disabled) {
-                button.setAttribute('data-original-value', button.value);
-                button.value = '处理中...';
-            } else {
-                const originalValue = button.getAttribute('data-original-value');
-                if (originalValue) {
-                    button.value = originalValue;
-                }
-            }
-        }
+    function safe(str){return str.replace(/[\\/*?:"<>|]/g,'_').slice(0,CONFIG.fileNameMaxLength).trim();}
+
+    function toggleButton(disabled){
+        const btn=document.getElementById('chat-exporter-export-all');
+        if(!btn)return;
+        if(disabled){btn.dataset.txt=btn.value;btn.disabled=true;btn.value='处理中…';}
+        else{btn.disabled=false;btn.value=btn.dataset.txt||'导出当前对话为 HTML';}
     }
 
-    // 显示Toast通知
-    function showToast(message) {
-        console.log(`Chat Exporter: Toast: ${message}`);
+    /* ========== 初始化 ========== */
+    function init(){setTimeout(addSettingsUI,1000);} // 等 DOM 稳定
 
-        if (typeof toastr !== 'undefined') {
-            toastr.info(message);
-        } else {
-            alert(message);
-        }
+    function waitForST(){
+        const t0=Date.now();
+        const timer=setInterval(()=>{
+            if(document.querySelector('#extensions_settings2, #extensions_settings')){clearInterval(timer);init();}
+            if(Date.now()-t0>30000){clearInterval(timer);init();} // 兜底
+        },500);
     }
 
-    // 初始化函数
-    function init() {
-        console.log('Chat Exporter: Initializing...');
-
-        setTimeout(() => {
-            addExtensionSettings();
-        }, 1000);
-    }
-
-    // 等待 SillyTavern 加载完成
-    function waitForLoad() {
-        console.log('Chat Exporter: Waiting for SillyTavern to load...');
-
-        const checkInterval = setInterval(() => {
-            const isLoaded = document.querySelector('#extensions_settings2') ||
-                           document.querySelector('#extensions_settings');
-
-            if (isLoaded) {
-                clearInterval(checkInterval);
-                console.log('Chat Exporter: SillyTavern loaded, initializing extension');
-                init();
-            }
-        }, 500);
-
-        setTimeout(() => {
-            clearInterval(checkInterval);
-            console.log('Chat Exporter: Timeout reached, force initializing');
-            init();
-        }, 30000);
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', waitForLoad);
-    } else {
-        waitForLoad();
-    }
+    document.readyState==='loading'?document.addEventListener('DOMContentLoaded',waitForST):waitForST();
 
 })();
